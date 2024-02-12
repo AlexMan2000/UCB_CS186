@@ -81,8 +81,10 @@ class InnerNode extends BPlusNode {
     @Override
     public LeafNode get(DataBox key) {
         // TODO(proj2): implement
-
-        return null;
+        int index = numLessThanEqual(key, keys);
+        Long childPointer = children.get(index);
+        BPlusNode targetChild = BPlusNode.fromBytes(metadata, bufferManager, treeContext, childPointer);
+        return targetChild.get(key);
     }
 
     // See BPlusNode.getLeftmostLeaf.
@@ -90,16 +92,67 @@ class InnerNode extends BPlusNode {
     public LeafNode getLeftmostLeaf() {
         assert(children.size() > 0);
         // TODO(proj2): implement
-
-        return null;
+        BPlusNode bPlusNode = BPlusNode.fromBytes(metadata, bufferManager, treeContext, children.get(0));
+        return bPlusNode.getLeftmostLeaf();
     }
 
     // See BPlusNode.put.
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
         // TODO(proj2): implement
+        int index = numLessThanEqual(key, keys);
+        BPlusNode bPlusNode = BPlusNode.fromBytes(metadata, bufferManager, treeContext, children.get(index));
+        Optional<Pair<DataBox, Long>> splitPair = bPlusNode.put(key, rid);
+        if (splitPair.equals(Optional.empty())) {
+            sync();
+            return Optional.empty();
+        } else {
+            Pair<DataBox, Long> dataBoxLongPair = splitPair.get();
+            DataBox splitKey = dataBoxLongPair.getFirst();
+            Long rightNodePointer = dataBoxLongPair.getSecond();
 
-        return Optional.empty();
+            // Insert the splitKey and rightChildPointer
+            for (int i = 0; i < keys.size(); i++) {
+                if (splitKey.compareTo(keys.get(i)) < 0) {
+                    keys.add(i, splitKey);
+                    children.add(i + 1, rightNodePointer);
+                    break;
+                }
+            }
+
+            // Split the Node
+            int order = metadata.getOrder();
+            if (keys.size() > order) {
+                // 1. Populate the rightNode
+                List<Long> newChildren = new ArrayList<>();
+                List<DataBox> newKeys = new ArrayList<>();
+                DataBox newSplitKey = keys.get(order);
+                for (int i = order; i < 2 * order + 1; i++) {
+                    if (i == order) {
+                        newChildren.add(children.get(i + 1));
+                        continue;
+                    }
+                    newKeys.add(keys.get(i));
+                    newChildren.add(children.get(i + 1));
+                }
+                // 2. Delete from leftNode
+                for (int i = 2 * order; i >= order; i--) {
+                    keys.remove(i);
+                    children.remove(i + 1);
+                }
+                // 3. Update the link in between
+                InnerNode newLeafNode = new InnerNode(metadata, bufferManager, newKeys, newChildren, treeContext);
+                Long newPageNum = newLeafNode.getPage().getPageNum();
+
+                // 4. Prepare for return
+                Pair<DataBox, Long> newPair = new Pair<>(newSplitKey, newPageNum);
+                sync();
+                return Optional.of(newPair);
+            } else {
+                sync();
+                return Optional.empty();
+            }
+        }
     }
 
     // See BPlusNode.bulkLoad.
@@ -115,8 +168,10 @@ class InnerNode extends BPlusNode {
     @Override
     public void remove(DataBox key) {
         // TODO(proj2): implement
-
-        return;
+        int index = numLessThanEqual(key, keys);
+        Long childPointer = children.get(index);
+        BPlusNode bPlusNode = BPlusNode.fromBytes(metadata, bufferManager, treeContext, childPointer);
+        bPlusNode.remove(key);
     }
 
     // Helpers /////////////////////////////////////////////////////////////////

@@ -146,8 +146,10 @@ public class BPlusTree {
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
         // TODO(proj2): implement
-
-        return Optional.empty();
+        // Recursive data structure
+        LeafNode leafNode = root.get(key);
+        // Once we get the leaf-node, we look into the leaf-node to find the recordID
+        return leafNode.getKey(key);
     }
 
     /**
@@ -202,8 +204,7 @@ public class BPlusTree {
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
         // TODO(proj2): Return a BPlusTreeIterator.
-
-        return Collections.emptyIterator();
+        return new BPlusTreeIterator();
     }
 
     /**
@@ -235,8 +236,19 @@ public class BPlusTree {
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
         // TODO(proj2): Return a BPlusTreeIterator.
-
-        return Collections.emptyIterator();
+        LeafNode currLeafNode = root.getLeftmostLeaf();
+        LeafNode startingLeafNode = null;
+        int currIndex = 0;
+        while (currLeafNode.getRightSibling().isPresent()) {
+            Iterator<RecordId> recordIdIterator = currLeafNode.scanGreaterEqual(key);
+            if (recordIdIterator.hasNext()) {
+                startingLeafNode = currLeafNode;
+                RecordId next = recordIdIterator.next();
+                currIndex = currLeafNode.getRids().indexOf(next);
+                return new BPlusTreeIterator(startingLeafNode, currIndex);
+            }
+        }
+        throw new NoSuchElementException("No such elements exist!");
     }
 
     /**
@@ -258,7 +270,17 @@ public class BPlusTree {
         // Use the provided updateRoot() helper method to change
         // the tree's root if the old root splits.
 
-        return;
+        Optional<Pair<DataBox, Long>> splitPair = root.put(key, rid);
+        if (splitPair.isPresent()) {
+            List<DataBox> keys = new ArrayList<>();
+            List<Long> children = new ArrayList<>();
+            keys.add(splitPair.get().getFirst());
+            // The page num of the original root, now becomes the left child of the new root
+            children.add(root.getPage().getPageNum());
+            // The page num of the newly created right child.
+            children.add(splitPair.get().getSecond());
+            this.updateRoot(new InnerNode(this.metadata, bufferManager, keys, children, lockContext));
+        }
     }
 
     /**
@@ -309,8 +331,7 @@ public class BPlusTree {
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
         // TODO(proj2): implement
-
-        return;
+        root.remove(key);
     }
 
     // Helpers /////////////////////////////////////////////////////////////////
@@ -424,18 +445,46 @@ public class BPlusTree {
     private class BPlusTreeIterator implements Iterator<RecordId> {
         // TODO(proj2): Add whatever fields and constructors you want here.
 
+        private LeafNode currNode;
+        private int currIndex;
+
+        public BPlusTreeIterator() {
+            currNode = root.getLeftmostLeaf();
+            currIndex = 0;
+        }
+
+
+        public BPlusTreeIterator(LeafNode node, int index) {
+            currNode = node;
+            currIndex = index;
+
+        }
+
+
         @Override
         public boolean hasNext() {
             // TODO(proj2): implement
-
+            int length = currNode.getKeys().size();
+            if (currIndex < length) {
+                return true;
+            }
+            Optional<LeafNode> rightSibling = currNode.getRightSibling();
+            if (rightSibling.isPresent()){
+                currNode = rightSibling.get();
+                currIndex = 0;
+            }
             return false;
         }
 
         @Override
         public RecordId next() {
             // TODO(proj2): implement
-
-            throw new NoSuchElementException();
+            if (hasNext()) {
+                RecordId rid = currNode.getRids().get(currIndex);
+                currIndex++;
+                return rid;
+            }
+            throw new NoSuchElementException("No more elements in the iterator!");
         }
     }
 }
