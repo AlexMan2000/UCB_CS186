@@ -161,22 +161,37 @@ class LeafNode extends BPlusNode {
     // See BPlusNode.put.
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
-        // TODO(proj2): implement
+        // TODO(proj2): implement;
         int found = keys.indexOf(key);
         if (found == -1) {
-            // New Key Added, maintaining the order
-            for (int i = 0; i < keys.size(); i++) {
-                // We have non-duplicate keys so it is > here
-                if (key.compareTo(keys.get(i)) < 0) {
-                    keys.add(i, key);
-                    rids.add(i, rid);
-                    break;
+
+            if (keys.isEmpty()) {
+                // New Key Added, when empty
+                keys.add(key);
+                rids.add(rid);
+            } else {
+                // New Key Added, maintaining the order
+                int i = 0;
+                while (i < keys.size()) {
+                    if (key.compareTo(keys.get(i)) < 0) {
+                        // If the current key is smaller than some existing key
+                        keys.add(i, key);
+                        rids.add(i, rid);
+                        break;
+                    }
+                    i++;
+                }
+                // New key is bigger than any existing keys, append at the end
+                if (i == keys.size()) {
+                    keys.add(key);
+                    rids.add(rid);
                 }
             }
 
+
             // Split the Node(if needed)
             int order = metadata.getOrder();
-            if (keys.size() > order) {
+            if (keys.size() > 2 * order) {
                 // If split
                 // 1. Populate the rightNode
                 List<RecordId> newRids = new ArrayList<>();
@@ -191,7 +206,13 @@ class LeafNode extends BPlusNode {
                     rids.remove(i);
                 }
                 // 3. Update the link in between
-                LeafNode newLeafNode = new LeafNode(metadata, bufferManager, newKeys, newRids, rightSibling, treeContext);
+                LeafNode newLeafNode = null;
+                if (rightSibling.isPresent()) {
+                    newLeafNode = new LeafNode(metadata, bufferManager, newKeys, newRids, rightSibling, treeContext);
+                } else {
+                    newLeafNode = new LeafNode(metadata, bufferManager, newKeys, newRids, Optional.empty(), treeContext);
+                }
+
                 Long newPageNum = newLeafNode.getPage().getPageNum();
                 rightSibling = Optional.of(newPageNum);
 
@@ -214,6 +235,36 @@ class LeafNode extends BPlusNode {
             float fillFactor) {
         // TODO(proj2): implement
 
+
+        int order = metadata.getOrder();
+        while(data.hasNext()) {
+            Pair<DataBox, RecordId> nextPair = data.next();
+            DataBox key = nextPair.getFirst();
+            RecordId rid = nextPair.getSecond();
+
+            // Assume sorted
+            put(key, rid);
+
+            int maxEntryNum = (int) Math.floor(fillFactor * order * 2);
+            if (keys.size() > maxEntryNum) {
+                List<DataBox> leftKeys = keys.subList(0, keys.size() - 1);
+                List<RecordId> leftRids = rids.subList(0, rids.size() - 1);
+
+                List<DataBox> rightKeys = keys.subList(keys.size() - 1, keys.size());
+                List<RecordId> rightRids = rids.subList(rids.size() - 1, rids.size());
+
+                keys = leftKeys;
+                rids = leftRids;
+
+                LeafNode newNode = new LeafNode(metadata, bufferManager, rightKeys, rightRids, rightSibling, treeContext);
+                Pair<DataBox, Long> newPair = new Pair<>(rightKeys.get(0), newNode.page.getPageNum());
+
+                sync();
+                return Optional.of(newPair);
+            }
+        }
+
+        sync();
         return Optional.empty();
     }
 
@@ -226,8 +277,8 @@ class LeafNode extends BPlusNode {
         if (index != -1) {
             keys.remove(index);
             rids.remove(index);
-            sync();
         }
+        sync();
     }
 
     // Iterators ///////////////////////////////////////////////////////////////
@@ -268,6 +319,10 @@ class LeafNode extends BPlusNode {
         }
 
         long pageNum = rightSibling.get();
+        // Added, for strange error
+        if (pageNum == -1) {
+            return Optional.empty();
+        }
         return Optional.of(LeafNode.fromBytes(metadata, bufferManager, treeContext, pageNum));
     }
 

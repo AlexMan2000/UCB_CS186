@@ -8,6 +8,7 @@ import edu.berkeley.cs186.database.concurrency.LockUtil;
 import edu.berkeley.cs186.database.databox.DataBox;
 import edu.berkeley.cs186.database.databox.Type;
 import edu.berkeley.cs186.database.io.DiskSpaceManager;
+import edu.berkeley.cs186.database.io.PageException;
 import edu.berkeley.cs186.database.memory.BufferManager;
 import edu.berkeley.cs186.database.table.RecordId;
 
@@ -204,7 +205,8 @@ public class BPlusTree {
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
         // TODO(proj2): Return a BPlusTreeIterator.
-        return new BPlusTreeIterator();
+        LeafNode leftNode = root.getLeftmostLeaf();
+        return new BPlusTreeIterator(leftNode, leftNode.scanAll());
     }
 
     /**
@@ -236,17 +238,9 @@ public class BPlusTree {
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
         // TODO(proj2): Return a BPlusTreeIterator.
-        LeafNode currLeafNode = root.getLeftmostLeaf();
-        LeafNode startingLeafNode = null;
-        int currIndex = 0;
-        while (currLeafNode.getRightSibling().isPresent()) {
-            Iterator<RecordId> recordIdIterator = currLeafNode.scanGreaterEqual(key);
-            if (recordIdIterator.hasNext()) {
-                startingLeafNode = currLeafNode;
-                RecordId next = recordIdIterator.next();
-                currIndex = currLeafNode.getRids().indexOf(next);
-                return new BPlusTreeIterator(startingLeafNode, currIndex);
-            }
+        if (root != null) {
+            LeafNode leftNode = root.get(key);
+            return new BPlusTreeIterator(leftNode, leftNode.scanGreaterEqual(key));
         }
         throw new NoSuchElementException("No such elements exist!");
     }
@@ -279,7 +273,8 @@ public class BPlusTree {
             children.add(root.getPage().getPageNum());
             // The page num of the newly created right child.
             children.add(splitPair.get().getSecond());
-            this.updateRoot(new InnerNode(this.metadata, bufferManager, keys, children, lockContext));
+            InnerNode newInnerNode = new InnerNode(this.metadata, bufferManager, keys, children, lockContext);
+            this.updateRoot(newInnerNode);
         }
     }
 
@@ -310,6 +305,24 @@ public class BPlusTree {
         // Note: You should NOT update the root variable directly.
         // Use the provided updateRoot() helper method to change
         // the tree's root if the old root splits.
+
+        while (data.hasNext()){
+            Optional<Pair<DataBox, Long>> cur = this.root.bulkLoad(data, fillFactor);
+            if (cur.isPresent()){
+                DataBox pushedKey = cur.get().getFirst();
+                Long rightChild = cur.get().getSecond();
+                Long leftChild = root.getPage().getPageNum();
+
+                List<DataBox> keys = new ArrayList<>();
+                keys.add(pushedKey);
+                List<Long> children = new ArrayList<>();
+                children.add(leftChild);
+                children.add(rightChild);
+                InnerNode newRoot = new InnerNode(metadata, bufferManager, keys, children, lockContext);
+                updateRoot(newRoot);
+            }
+        }
+
 
         return;
     }
@@ -446,32 +459,19 @@ public class BPlusTree {
         // TODO(proj2): Add whatever fields and constructors you want here.
 
         private LeafNode currNode;
-        private int currIndex;
+        private Iterator<RecordId> currIter;
 
-        public BPlusTreeIterator() {
-            currNode = root.getLeftmostLeaf();
-            currIndex = 0;
-        }
-
-
-        public BPlusTreeIterator(LeafNode node, int index) {
-            currNode = node;
-            currIndex = index;
-
+        public BPlusTreeIterator(LeafNode leftNode, Iterator<RecordId> iter) {
+            currNode = leftNode;
+            currIter = iter;
         }
 
 
         @Override
         public boolean hasNext() {
             // TODO(proj2): implement
-            int length = currNode.getKeys().size();
-            if (currIndex < length) {
+            if (currIter.hasNext() || currNode.getRightSibling().isPresent()) {
                 return true;
-            }
-            Optional<LeafNode> rightSibling = currNode.getRightSibling();
-            if (rightSibling.isPresent()){
-                currNode = rightSibling.get();
-                currIndex = 0;
             }
             return false;
         }
@@ -479,12 +479,15 @@ public class BPlusTree {
         @Override
         public RecordId next() {
             // TODO(proj2): implement
-            if (hasNext()) {
-                RecordId rid = currNode.getRids().get(currIndex);
-                currIndex++;
-                return rid;
+            if (!hasNext()) {
+                throw new NoSuchElementException("No more elements in the iterator!");
             }
-            throw new NoSuchElementException("No more elements in the iterator!");
+            if (!currIter.hasNext()) {
+                currNode = currNode.getRightSibling().get();
+                currIter = currNode.scanAll();
+            }
+            return currIter.next();
+
         }
     }
 }

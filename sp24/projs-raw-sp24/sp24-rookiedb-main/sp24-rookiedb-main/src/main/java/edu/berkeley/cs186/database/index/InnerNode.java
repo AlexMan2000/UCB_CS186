@@ -103,7 +103,7 @@ class InnerNode extends BPlusNode {
         int index = numLessThanEqual(key, keys);
         BPlusNode bPlusNode = BPlusNode.fromBytes(metadata, bufferManager, treeContext, children.get(index));
         Optional<Pair<DataBox, Long>> splitPair = bPlusNode.put(key, rid);
-        if (splitPair.equals(Optional.empty())) {
+        if (!splitPair.isPresent()) {
             sync();
             return Optional.empty();
         } else {
@@ -111,18 +111,23 @@ class InnerNode extends BPlusNode {
             DataBox splitKey = dataBoxLongPair.getFirst();
             Long rightNodePointer = dataBoxLongPair.getSecond();
 
-            // Insert the splitKey and rightChildPointer
-            for (int i = 0; i < keys.size(); i++) {
-                if (splitKey.compareTo(keys.get(i)) < 0) {
-                    keys.add(i, splitKey);
-                    children.add(i + 1, rightNodePointer);
+            // Insert the splitKey and rightChildPointer, maintaining the order
+            int m = 0;
+            while (m < keys.size()) {
+                if (splitKey.compareTo(keys.get(m)) < 0) {
+                    keys.add(m, splitKey);
+                    children.add(m + 1, rightNodePointer);
                     break;
                 }
+                m++;
             }
-
+            if (m == keys.size()) {
+                keys.add(splitKey);
+                children.add(rightNodePointer);
+            }
             // Split the Node
             int order = metadata.getOrder();
-            if (keys.size() > order) {
+            if (keys.size() > 2 * order) {
                 // 1. Populate the rightNode
                 List<Long> newChildren = new ArrayList<>();
                 List<DataBox> newKeys = new ArrayList<>();
@@ -160,7 +165,48 @@ class InnerNode extends BPlusNode {
     public Optional<Pair<DataBox, Long>> bulkLoad(Iterator<Pair<DataBox, RecordId>> data,
             float fillFactor) {
         // TODO(proj2): implement
+        int d = metadata.getOrder();
+        while (data.hasNext() && keys.size() <= 2 * d) {
+            BPlusNode curChild = getChild(children.size() - 1);
+            Optional<Pair<DataBox, Long>> middle = curChild.bulkLoad(data, fillFactor);
 
+            if (middle.isPresent()) {
+                DataBox pushedKey = middle.get().getFirst();
+                Long newChild = middle.get().getSecond();
+
+                int i = InnerNode.numLessThanEqual(pushedKey, keys);
+                keys.add(i, pushedKey);
+                children.add(i + 1, newChild);
+            }
+        }
+        // If there is still data but inner node splits.
+        if (data.hasNext()){
+            BPlusNode curChild = getChild(children.size() - 1);
+            Optional<Pair<DataBox, Long>> middle = curChild.bulkLoad(data, fillFactor);
+            DataBox pushedKey = middle.get().getFirst();
+            Long newChild = middle.get().getSecond();
+
+            int i = InnerNode.numLessThanEqual(pushedKey, keys);
+            keys.add(i, pushedKey);
+            children.add(i + 1, newChild);
+            DataBox pushUp = keys.get(d);
+            List<DataBox> leftK = keys.subList(0, d);
+            List<DataBox> rightK = keys.subList(d + 1, keys.size());
+
+            List<Long> leftC = children.subList(0, d + 1);
+            List<Long> rightC = children.subList(d + 1, children.size());
+
+            keys = leftK;
+            children = leftC;
+            InnerNode rightInner= new InnerNode(metadata, bufferManager, rightK, rightC, treeContext);
+            sync();
+            Long curPageNum = rightInner.getPage().getPageNum();
+            Pair pushingPair = new Pair<>(pushUp, curPageNum);
+            return Optional.of(pushingPair);
+        }
+
+        // There is no more data.
+        sync();
         return Optional.empty();
     }
 
@@ -172,6 +218,7 @@ class InnerNode extends BPlusNode {
         Long childPointer = children.get(index);
         BPlusNode bPlusNode = BPlusNode.fromBytes(metadata, bufferManager, treeContext, childPointer);
         bPlusNode.remove(key);
+        sync();
     }
 
     // Helpers /////////////////////////////////////////////////////////////////
