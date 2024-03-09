@@ -88,6 +88,19 @@ public class BNLJOperator extends JoinOperator {
          */
         private void fetchNextLeftBlock() {
             // TODO(proj3_part1): implement
+            if (!leftSourceIterator.hasNext()) return;
+            /*
+                 If leftRecordSource still has records, then do the following
+
+                 Call QueryOperator#getBlockIterator() to get the iterator that
+                 iterates through all the records within the blocks.
+                 - leftSourceIterator: Iterators over all records of left relations, we want to transform it into a block iterator
+                 - getLeftSource().getSchema() get the column configuration of left source.
+                 - numBuffers - 2 get the maximum pages in a block to load from the memory.
+             */
+            leftBlockIterator = getBlockIterator(leftSourceIterator, getLeftSource().getSchema(), numBuffers - 2);
+            leftBlockIterator.markNext(); // Backtracking needed
+            leftRecord = leftBlockIterator.next();
         }
 
         /**
@@ -103,6 +116,12 @@ public class BNLJOperator extends JoinOperator {
          */
         private void fetchNextRightPage() {
             // TODO(proj3_part1): implement
+
+            if (!rightSourceIterator.hasNext()) return;
+
+            // Create a block BacktrackingIterator with block size = 1(one page)
+            rightPageIterator = getBlockIterator(rightSourceIterator, getRightSource().getSchema(), 1);
+            rightPageIterator.markNext(); // Backtracking needed
         }
 
         /**
@@ -115,7 +134,48 @@ public class BNLJOperator extends JoinOperator {
          */
         private Record fetchNextRecord() {
             // TODO(proj3_part1): implement
-            return null;
+            if (leftRecord == null) {
+                // Case 0: Fail fast, if there is no more record, do nothing
+                return null;
+            }
+
+            while (true) {
+                if (rightPageIterator.hasNext()) {
+                    // Case 1: Still have records in right page, we keep iterating
+                    Record rightRecord = rightPageIterator.next();
+                    // If key matches, return the concatenated record
+                    if (compare(leftRecord, rightRecord) == 0) {
+                        return leftRecord.concat(rightRecord);
+                    }
+                } else if (leftBlockIterator.hasNext()) {
+                    // Case 2: If we have finished the records in this page but the vertical axis
+                    // still has records, we have to rewind the horizontal axis in the page
+                    leftRecord = leftBlockIterator.next();
+                    rightPageIterator.reset();
+                } else if (rightSourceIterator.hasNext()){
+                    /*
+                        Case 3: Both leftblock and rightpage has consumed all the records, but the horizontal
+                        direction has yet end, then we have to rewind on the vertical axis but fetch the
+                        next page on the horizontal axis.
+                     */
+                    fetchNextRightPage();
+                    leftBlockIterator.reset();
+                    leftRecord = leftBlockIterator.next();
+                } else if (leftSourceIterator.hasNext()){
+                    /*
+                       Reached the end of the current block and horizontal axis, have to rewind on both vertical and
+                       horizontal axis.
+                     */
+                    fetchNextLeftBlock();
+                    /* Don't forget to reset here since the getBlockIterator() relies on the current
+                        position of the sourceIterator.
+                    */
+                    rightSourceIterator.reset();
+                    fetchNextRightPage();
+                } else {
+                    return null;
+                }
+            }
         }
 
         /**
