@@ -9,6 +9,7 @@ import edu.berkeley.cs186.database.query.join.SNLJOperator;
 import edu.berkeley.cs186.database.table.Record;
 import edu.berkeley.cs186.database.table.Schema;
 
+import javax.management.Query;
 import java.util.*;
 
 /**
@@ -677,6 +678,62 @@ public class QueryPlan {
         //      calculate the cheapest join with the new table (the one you
         //      fetched an operator for from pass1Map) and the previously joined
         //      tables. Then, update the result map if needed.
+        for (Map.Entry<Set<String>, QueryOperator> pair: prevMap.entrySet()) {
+            // { A,B } SNLJ  {B, C} SMJ  {A, C} BNLJ, {B,T} SNLJ, .... all are optimal plans
+            Set<String> tablePairSet = pair.getKey();
+            QueryOperator leftOp = pair.getValue();
+            for (JoinPredicate jp: this.joinPredicates) {
+                String leftTable = jp.leftTable;
+                String leftColumn = jp.leftColumn;
+                String rightTable = jp.rightTable;
+                String rightColumn = jp.rightColumn;
+
+                QueryOperator rightOp;
+                QueryOperator minCostOp;
+                Set<String> probeKey= new HashSet<>();
+                Set<String> resultKey = new HashSet<>(tablePairSet);
+
+                if (!tablePairSet.contains(leftTable) && tablePairSet.contains(rightTable)) {
+                    probeKey.add(leftTable);
+                    rightOp = pass1Map.get(probeKey);
+                    /*
+                        Be careful with the order here, suppose the join predicate is
+                            JOIN ON A.aid = B.bid
+                            - leftTable = A
+                            - rightTable = B
+                        But the current set is {B,C}, then B is in the set but A is not.
+                        So we want to join B and A where {B,C} is leftOp and A is rightOp
+
+                        B has rightColumn, but has to be on the left, so we pass in rightColumn first.
+                     */
+                    minCostOp = minCostJoinType(leftOp, rightOp, rightColumn, leftColumn);
+                    resultKey.add(leftTable);
+                } else if (tablePairSet.contains(leftTable) && !tablePairSet.contains(rightTable)){
+                    probeKey.add(rightTable);
+                    rightOp = pass1Map.get(probeKey);
+                    minCostOp = minCostJoinType(leftOp, rightOp, leftColumn, rightColumn);
+                    resultKey.add(rightTable);
+                } else {
+                    /*
+                        3. If both exists, then this join must have been evaluated
+                        and optimized in previous pass, don't have to evaluate it again, skip
+                        4. If neither exists, then skip.
+                     */
+                    continue;
+                }
+
+                int minCost = minCostOp.estimateIOCost();
+                if (result.containsKey(resultKey)) {
+                    if (minCost < result.get(resultKey).estimateIOCost()) {
+                        result.put(resultKey, minCostOp);
+                    }
+                } else {
+                    result.put(resultKey, minCostOp);
+                }
+            }
+        }
+
+        // {A,B,C} SMJ, {A,B,T} SNLJ ... all optimal plans
         return result;
     }
 
@@ -718,15 +775,35 @@ public class QueryPlan {
         // Pass 1: For each table, find the lowest cost QueryOperator to access
         // the table. Construct a mapping of each table name to its lowest cost
         // operator.
-        //
+        int joinSize = tableNames.size();
+        Map<Set<String>, QueryOperator> pass1Map = new HashMap<>();
+        Map<Set<String>, QueryOperator> prevMap = pass1Map;
+        for (String tableName: tableNames) {
+            QueryOperator minCostOp = minCostSingleAccess(tableName);
+            Set<String> mapKey = new HashSet<>();
+            mapKey.add(tableName);
+            pass1Map.put(mapKey, minCostOp);
+        }
         // Pass i: On each pass, use the results from the previous pass to find
         // the lowest cost joins with each table from pass 1. Repeat until all
         // tables have been joined.
-        //
+        int currSize = 1;
+        while (currSize < joinSize) {
+            prevMap = minCostJoins(prevMap, pass1Map);
+            currSize++;
+        }
+
         // Set the final operator to the lowest cost operator from the last
         // pass, add group by, project, sort and limit operators, and return an
         // iterator over the final operator.
-        return this.executeNaive(); // TODO(proj3_part2): Replace this!
+
+        this.finalOperator = minCostOperator(prevMap);
+        this.addGroupBy();
+        this.addProject();
+        this.addSort();
+        this.addLimit();
+
+        return this.finalOperator.iterator();
     }
 
     // EXECUTE NAIVE ///////////////////////////////////////////////////////////
