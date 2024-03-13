@@ -225,7 +225,7 @@ public class TestGraceHashJoin {
                 Iterator<Record> iter = ghj.iterator();
                 while(iter.hasNext()) iter.next();
             } catch (Exception e) {
-                fail(e.getMessage());
+                  fail(e.getMessage());
             }
         }
     }

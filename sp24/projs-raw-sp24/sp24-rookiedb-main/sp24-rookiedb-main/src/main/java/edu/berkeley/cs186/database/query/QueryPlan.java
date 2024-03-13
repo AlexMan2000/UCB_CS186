@@ -521,6 +521,7 @@ public class QueryPlan {
             // ignore if the selection predicate is for a different table
             if (!p.tableName.equals(table)) continue;
             boolean indexExists = this.transaction.indexExists(table, p.column);
+            // indexScan not supported for != predicate
             boolean canScan = p.operator != PredicateOperator.NOT_EQUALS;
             if (indexExists && canScan) result.add(i);
         }
@@ -577,6 +578,36 @@ public class QueryPlan {
         QueryOperator minOp = new SequentialScanOperator(this.transaction, table);
 
         // TODO(proj3_part2): implement
+        // Even if the full scan will always cost <num_of_pages> I/Os to run, we have to apply selection
+        // operator to it in order to pass the test.
+        minOp = addEligibleSelections(minOp, -1);
+        int bestIOCost = minOp.estimateIOCost();
+        int currIOCost;
+
+        // Get the index of the column that has index built on it and the select operator on that column
+        // is not !=
+        List<Integer> tableIndices = getEligibleIndexColumns(table);
+
+        /* For each column with index built on it, calculate the I/O costs of performing indexScan
+        *  If there is selection operator that's pushed down on that column, ignore it since index scan
+        *  is using that selection operator, we don't want to count for its I/Os twice(one for selection, one for indexScan)
+        * */
+        for (Integer index: tableIndices) {
+            // Get the select predicate for current index scan, we want to exclude this select predicate
+            SelectPredicate sp = this.selectPredicates.get(index);
+            QueryOperator indexScanOp = new IndexScanOperator(this.transaction,
+                    table,
+                    sp.column,
+                    sp.operator,
+                    sp.value);
+            indexScanOp = addEligibleSelections(indexScanOp, index);
+            currIOCost = indexScanOp.estimateIOCost();
+            if (currIOCost < bestIOCost) {
+                bestIOCost = currIOCost;
+                minOp = indexScanOp;
+            }
+        }
+
         return minOp;
     }
 

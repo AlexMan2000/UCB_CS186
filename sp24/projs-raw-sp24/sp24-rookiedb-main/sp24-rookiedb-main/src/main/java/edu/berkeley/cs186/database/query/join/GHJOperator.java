@@ -71,7 +71,23 @@ public class GHJOperator extends JoinOperator {
         // You may find the implementation in SHJOperator.java to be a good
         // starting point. You can use the static method HashFunc.hashDataBox
         // to get a hash value.
-        return;
+        for (Record record: records) {
+            DataBox columnValue;
+            if (left) {
+                columnValue = record.getValue(getLeftColumnIndex());
+            } else {
+                columnValue = record.getValue(getRightColumnIndex());
+            }
+
+            // Hash the column-value(key)
+            int hashValue = HashFunc.hashDataBox(columnValue, pass);
+            int partitionNum = hashValue % partitions.length;
+            if (partitionNum < 0) {
+                partitionNum += partitions.length;
+            }
+
+            partitions[partitionNum].add(record);
+        }
     }
 
     /**
@@ -112,6 +128,41 @@ public class GHJOperator extends JoinOperator {
         // You shouldn't refer to any variable starting with "left" or "right"
         // here, use the "build" and "probe" variables we set up for you.
         // Check out how SHJOperator implements this function if you feel stuck.
+
+
+        Map<DataBox, List<Record>> hashTable = new HashMap<>();
+
+        // Stage 1: Building
+        for (Record record: buildRecords) {
+            DataBox key = record.getValue(buildColumnIndex);
+            // No such key, create a bucket
+            if (!hashTable.containsKey(key)) {
+                hashTable.put(key, new ArrayList<>());
+            }
+            // Has such key, add to the existing bucket
+            hashTable.get(key).add(record);
+        }
+
+        // Stage 2: Staging
+        for (Record probe: probeRecords) {
+            DataBox key = probe.getValue(probeColumnIndex);
+            if (hashTable.containsKey(key)) {
+                List<Record> records = hashTable.get(key);
+                for (Record build: records) {
+                    Record grace;
+                    // Because we join left and right, the left relation
+                    // should appear first in the final record
+
+                    // If probe relation is the left relation
+                    if (probeFirst) {
+                        grace = probe.concat(build);
+                    } else {
+                        grace = build.concat(probe);
+                    }
+                    this.joinedRecords.add(grace);
+                }
+            }
+        }
     }
 
     /**
@@ -136,6 +187,19 @@ public class GHJOperator extends JoinOperator {
             // TODO(proj3_part1): implement the rest of grace hash join
             // If you meet the conditions to run the build and probe you should
             // do so immediately. Otherwise you should make a recursive call.
+
+            /*
+              Since leftPartitions and rightparitions are assumed to be of the same length
+              We can do the following without OUT OF BOUND exception
+            */
+            Partition leftPartition = leftPartitions[i];
+            Partition rightPartition = rightPartitions[i];
+            if (leftPartition.getNumPages() <= numBuffers - 2 || rightPartition.getNumPages() <= numBuffers - 2) {
+                buildAndProbe(leftPartition, rightPartition);
+            } else {
+                run(leftPartition, rightPartition, pass + 1);
+            }
+
         }
     }
 
@@ -203,6 +267,15 @@ public class GHJOperator extends JoinOperator {
 
         // TODO(proj3_part1): populate leftRecords and rightRecords such that
         // SHJ breaks when trying to join them but not GHJ
+
+        // When the left records cannot fit in B - 2 buffers, SHJ will error but SHJ will not,
+
+        // Any big enough number >= 136 is ok for SHJ to error and GHJ will succeed
+        for (int i = 0; i < 136; i++) {
+            leftRecords.add(createRecord(i));
+            rightRecords.add(createRecord(i));
+        }
+
         return new Pair<>(leftRecords, rightRecords);
     }
 
@@ -223,6 +296,23 @@ public class GHJOperator extends JoinOperator {
         ArrayList<Record> leftRecords = new ArrayList<>();
         ArrayList<Record> rightRecords = new ArrayList<>();
         // TODO(proj3_part1): populate leftRecords and rightRecords such that GHJ breaks
+
+        /*
+        *  Just consider the extreme case where all records hashed to the same partition
+        *  in different pass
+        *  But after 5 pass the partition size is still bigger than B - 2
+        *
+        *  So we create the records all with the same key in both left and rightRecords
+        *  But how many records do we need?
+        *
+        *  Minimally 33, (B - 2) * 8 + 1 = 33;
+        * */
+
+        int randomValue = 100;
+        for (int i = 0; i < 33; i++) {
+            leftRecords.add(createRecord(randomValue));
+            rightRecords.add(createRecord(randomValue));
+        }
 
         return new Pair<>(leftRecords, rightRecords);
     }
